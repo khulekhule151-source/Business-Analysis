@@ -3,6 +3,9 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Header, Depends, UploadFile, File
+import pandas as pd
+import io
+import os
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 try:
@@ -23,8 +26,162 @@ TOKEN_SECRET = os.getenv("BUSINESS_ANALYSIS_TOKEN_SECRET", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 
+
 @app.post("/api/analyze")
 async def analyze_file(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail="No file selected."
+        )
+
+    filename = file.filename.lower()
+
+    if not filename.endswith((".csv", ".xlsx", ".xls")):
+        raise HTTPException(
+            status_code=400,
+            detail="Only CSV, XLSX and XLS files are supported."
+        )
+
+    data = await file.read()
+
+    if not data:
+        raise HTTPException(
+            status_code=400,
+            detail="The selected file is empty."
+        )
+
+    try:
+        # -----------------------------
+        # READ FILE
+        # -----------------------------
+        if filename.endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(data))
+        else:
+            df = pd.read_excel(io.BytesIO(data))
+
+        # -----------------------------
+        # BASIC INFORMATION
+        # -----------------------------
+        original_rows = len(df)
+        original_columns = len(df.columns)
+
+        # Remove completely empty rows
+        df = df.dropna(how="all")
+
+        # Remove completely empty columns
+        df = df.dropna(axis=1, how="all")
+
+        cleaned_rows = len(df)
+        cleaned_columns = len(df.columns)
+
+        # -----------------------------
+        # CLEAN COLUMN NAMES
+        # -----------------------------
+        df.columns = [
+            str(column).strip().replace("\n", " ")
+            for column in df.columns
+        ]
+
+        # -----------------------------
+        # MISSING VALUES
+        # -----------------------------
+        missing_values = int(df.isna().sum().sum())
+
+        # -----------------------------
+        # DUPLICATE ROWS
+        # -----------------------------
+        duplicate_rows = int(df.duplicated().sum())
+
+        # -----------------------------
+        # NUMERIC ANALYSIS
+        # -----------------------------
+        numeric_columns = df.select_dtypes(
+            include="number"
+        ).columns.tolist()
+
+        numeric_summary = {}
+
+        for column in numeric_columns:
+            series = df[column].dropna()
+
+            if len(series) > 0:
+                numeric_summary[column] = {
+                    "total": float(series.sum()),
+                    "average": float(series.mean()),
+                    "minimum": float(series.min()),
+                    "maximum": float(series.max())
+                }
+
+        # -----------------------------
+        # TEXT/CATEGORY ANALYSIS
+        # -----------------------------
+        categorical_summary = {}
+
+        for column in df.select_dtypes(
+            include=["object", "category"]
+        ).columns:
+
+            values = (
+                df[column]
+                .dropna()
+                .astype(str)
+                .value_counts()
+                .head(10)
+                .to_dict()
+            )
+
+            categorical_summary[column] = values
+
+        # -----------------------------
+        # PREVIEW
+        # -----------------------------
+        preview_df = df.head(10).fillna("")
+
+        preview = preview_df.to_dict(
+            orient="records"
+        )
+
+        # -----------------------------
+        # RESULT
+        # -----------------------------
+        return {
+            "success": True,
+
+            "file": {
+                "filename": file.filename,
+                "size_bytes": len(data)
+            },
+
+            "dataset": {
+                "original_rows": original_rows,
+                "original_columns": original_columns,
+                "cleaned_rows": cleaned_rows,
+                "cleaned_columns": cleaned_columns
+            },
+
+            "data_quality": {
+                "missing_values": missing_values,
+                "duplicate_rows": duplicate_rows
+            },
+
+            "numeric_columns": numeric_columns,
+
+            "numeric_summary": numeric_summary,
+
+            "categorical_summary": categorical_summary,
+
+            "preview": preview,
+
+            "message": "Business analysis completed successfully."
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not analyze file: {str(e)}"
+        )
+    
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file selected.")
 

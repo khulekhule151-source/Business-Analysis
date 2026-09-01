@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import hashlib, secrets
 import os
-import request
+import requests
 
 APP_NAME = "BUSINESS ANALYSIS"
 PUBLISHER = "KHÙLÈ KHÙLÈ III"
