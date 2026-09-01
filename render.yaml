@@ -18,9 +18,9 @@ services:
         sync: false
       - key: DATABASE_URL
         fromDatabase:
-          name: business-analysis-db
+          name: business_analysis_db_6kex
           property: connectionString
 
 databases:
-  - name: business-analysis-db
+  - name: business_analysis_db_6kex
     plan: free
