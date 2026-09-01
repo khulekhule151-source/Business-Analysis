@@ -2,7 +2,7 @@ import os, secrets, hashlib, sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, UploadFile, File
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 try:
@@ -22,6 +22,31 @@ TELEMETRY_KEY = os.getenv("BUSINESS_ANALYSIS_TELEMETRY_KEY", "")
 TOKEN_SECRET = os.getenv("BUSINESS_ANALYSIS_TOKEN_SECRET", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
+
+@app.post("/api/analyze")
+async def analyze_file(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file selected.")
+
+    filename = file.filename.lower()
+
+    if not filename.endswith((".csv", ".xlsx", ".xls")):
+        raise HTTPException(
+            status_code=400,
+            detail="Only CSV, XLSX and XLS files are supported."
+        )
+
+    data = await file.read()
+
+    if not data:
+        raise HTTPException(status_code=400, detail="The selected file is empty.")
+
+    return {
+        "success": True,
+        "filename": file.filename,
+        "size_bytes": len(data),
+        "message": "File received successfully."
+    }
 
 def now_iso(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
