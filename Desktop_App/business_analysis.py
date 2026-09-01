@@ -2,6 +2,8 @@ import os, sqlite3, uuid, platform, json, urllib.request
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import hashlib, secrets
+import os
+import request
 
 APP_NAME = "BUSINESS ANALYSIS"
 PUBLISHER = "KHÙLÈ KHÙLÈ III"
@@ -152,10 +154,84 @@ class App(tk.Tk):
         tk.Label(body,text="Publisher: "+PUBLISHER,bg="#0b1020",fg="#66738e").pack(anchor="w")
 
     def import_file(self):
-        path=filedialog.askopenfilename(filetypes=[("Excel/CSV","*.xlsx *.xls *.csv"),("All files","*.*")])
-        if path:
-            send_event("file_import_started")
-            messagebox.showinfo("Business Analysis","File selected. Connect the analysis modules to process it.")
+        path = filedialog.askopenfilename(
+            filetypes=[
+                ("Excel/CSV", "*.xlsx *.xls *.csv"),
+                ("All files", "*.*")
+            ]
+        )
+
+        if not path:
+            return
+
+        send_event("file_import_started")
+
+        api_url = "https://business-analysis-api-I8nm.onrender.com/api/analyze"
+
+        try:
+            with open(path, "rb") as f:
+                files = {
+                    "file": (
+                        os.path.basename(path),
+                        f,
+                        "application/octet-stream"
+                    )
+                }
+
+                response = requests.post(
+                    api_url,
+                    files=files,
+                    timeout=120
+                )
+
+            if response.ok:
+                result = response.json()
+
+                messagebox.showinfo(
+                    "Business Analysis",
+                    f"File uploaded successfully!\n\n"
+                    f"File: {result.get('filename', os.path.basename(path))}\n"
+                    f"Size: {result.get('size_bytes', 0):,} bytes\n\n"
+                    f"{result.get('message', 'File received successfully.')}"
+                )
+
+                send_event("file_import_completed")
+
+            else:
+                try:
+                    error = response.json().get("detail", response.text)
+                except Exception:
+                    error = response.text
+
+                messagebox.showerror(
+                    "Business Analysis",
+                    f"Analysis API returned an error.\n\n"
+                    f"Status: {response.status_code}\n"
+                    f"Error: {error}"
+                )
+
+                send_event("file_import_failed")
+
+        except requests.exceptions.Timeout:
+            messagebox.showerror(
+                "Business Analysis",
+                "The analysis server took too long to respond."
+            )
+            send_event("file_import_timeout")
+
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror(
+                "Business Analysis",
+                f"Could not connect to the analysis server.\n\n{exc}"
+            )
+            send_event("file_import_connection_failed")
+
+        except Exception as exc:
+            messagebox.showerror(
+                "Business Analysis",
+                f"Unexpected error:\n\n{exc}"
+            )
+            send_event("file_import_failed")
 
 if __name__=="__main__":
     App().mainloop()
