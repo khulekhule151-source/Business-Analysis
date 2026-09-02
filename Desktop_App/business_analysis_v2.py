@@ -46,13 +46,13 @@ except ImportError as exc:
 APP_NAME = "BUSINESS ANALYSIS"
 APP_VERSION = "2.0.0"
 PUBLISHER = "Khùlè Khùlè III"
-API_BASE_URL = "https://business-analysis-api-I8nm.onrender.com"
+API_BASE_URL = "https://business-analysis-api-l8nm.onrender.com"
 OWNER_LOGIN_URL = API_BASE_URL + "/api/owner/login"
 OWNER_SUMMARY_URL = API_BASE_URL + "/api/owner/summary"
 TELEMETRY_URL = API_BASE_URL + "/api/telemetry"
-ANALYSIS_API_URL = "https://business-analysis-api-I8nm.onrender.com/api/analyze"
+ANALYSIS_API_URL = "https://business-analysis-api-l8nm.onrender.com/api/analyze"
 ANALYSIS_API_TIMEOUT = 120
-HEALTH_API_URL = "https://business-analysis-api-I8nm.onrender.com/health"
+HEALTH_API_URL = "https://business-analysis-api-l8nm.onrender.com/health"
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 EXPORT_DIR = BASE_DIR / "exports"

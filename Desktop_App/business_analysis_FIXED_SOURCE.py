@@ -38,7 +38,7 @@ except ImportError as exc:
 
 
 APP_NAME = "BUSINESS ANALYSIS"
-ANALYSIS_API_URL = "https://business-analysis-api-I8nm.onrender.com/api/analyze"
+ANALYSIS_API_URL = "https://business-analysis-api-l8nm.onrender.com/api/analyze"
 ANALYSIS_API_TIMEOUT = 120
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
