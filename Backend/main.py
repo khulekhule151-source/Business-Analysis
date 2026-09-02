@@ -1,103 +1,147 @@
-import os, secrets, hashlib, sqlite3
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Header, Depends
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, UploadFile, File, HTTPException, Header, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import os, io, hmac, hashlib, secrets, time, json
+from datetime import datetime, timezone
+import pandas as pd
+
+APP_NAME = "BUSINESS ANALYSIS Owner Control Center"
+APP_VERSION = "2.0.0"
+OWNER_USERNAME = os.getenv("OWNER_USERNAME", "admin")
+OWNER_PASSWORD = os.getenv("OWNER_PASSWORD", "")
+OWNER_TOKEN_SECRET = os.getenv("OWNER_TOKEN_SECRET", "")
+TELEMETRY_KEY = os.getenv("TELEMETRY_KEY", "")
+
 try:
     import psycopg
     from psycopg.rows import dict_row
-except ImportError:
+except Exception:
     psycopg = None
 
-APP_NAME = "BUSINESS ANALYSIS Owner Control Center"
-PUBLISHER = "KHÙLÈ KHÙLÈ III"
-APP_VERSION = "1.0.0"
-BASE_DIR = Path(__file__).resolve().parent
-SQLITE_PATH = BASE_DIR / "owner_analytics.db"
-OWNER_USERNAME = os.getenv("BUSINESS_ANALYSIS_OWNER_USERNAME", "owner")
-OWNER_PASSWORD = os.getenv("BUSINESS_ANALYSIS_OWNER_PASSWORD", "")
-TELEMETRY_KEY = os.getenv("BUSINESS_ANALYSIS_TELEMETRY_KEY", "")
-TOKEN_SECRET = os.getenv("BUSINESS_ANALYSIS_TOKEN_SECRET", "")
-DATABASE_URL = os.getenv("DATABASE_URL", "")
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
-def now_iso(): return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-class Conn:
-    def __init__(self):
-        self.pg=bool(DATABASE_URL)
-        if self.pg:
-            if psycopg is None: raise RuntimeError("psycopg is required when DATABASE_URL is configured.")
-            self.conn=psycopg.connect(DATABASE_URL, row_factory=dict_row)
-        else:
-            self.conn=sqlite3.connect(SQLITE_PATH); self.conn.row_factory=sqlite3.Row
-    def execute(self,sql,params=()): return self.conn.execute(sql.replace("?","%s") if self.pg else sql,params)
-    def executescript(self,sql):
-        if self.pg:
-            with self.conn.cursor() as cur:
-                for statement in [x.strip() for x in sql.split(';') if x.strip()]: cur.execute(statement)
-        else: self.conn.executescript(sql)
-    def commit(self): self.conn.commit()
-    def close(self): self.conn.close()
-
-def db(): return Conn()
-
-def init_db():
-    c=db(); c.executescript("""
-    CREATE TABLE IF NOT EXISTS installations (installation_id TEXT PRIMARY KEY, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, app_version TEXT NOT NULL, os_name TEXT NOT NULL, event_count INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, installation_id TEXT NOT NULL, event_name TEXT NOT NULL, app_version TEXT NOT NULL, os_name TEXT NOT NULL, occurred_at TEXT NOT NULL);
-    CREATE INDEX IF NOT EXISTS idx_events_installation ON events(installation_id);
-    CREATE INDEX IF NOT EXISTS idx_events_occurred ON events(occurred_at);
-    """); c.commit(); c.close()
-init_db()
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
 class TelemetryEvent(BaseModel):
-    installation_id:str=Field(min_length=16,max_length=80); event_name:str=Field(min_length=2,max_length=80); app_version:str=Field(min_length=1,max_length=40); os_name:str=Field(min_length=1,max_length=80); occurred_at:Optional[str]=None
-class LoginRequest(BaseModel): username:str; password:str
+    installation_id: str
+    event_name: str
+    app_version: str = APP_VERSION
+    os_name: str = ""
+    occurred_at: str = ""
 
-def check_telemetry_key(x_telemetry_key:Optional[str]=Header(default=None)):
-    if not TELEMETRY_KEY: raise HTTPException(503,"Telemetry is not configured on this server.")
-    if not x_telemetry_key or not secrets.compare_digest(x_telemetry_key,TELEMETRY_KEY): raise HTTPException(401,"Invalid telemetry key.")
+def db_conn():
+    url=os.getenv("DATABASE_URL")
+    if not url or psycopg is None: return None
+    return psycopg.connect(url, row_factory=dict_row)
+
+def init_db():
+    c=db_conn()
+    if not c: return
+    with c.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS installations (installation_id TEXT PRIMARY KEY, first_seen TIMESTAMPTZ NOT NULL, last_seen TIMESTAMPTZ NOT NULL, app_version TEXT, os_name TEXT)""")
+        cur.execute("""CREATE TABLE IF NOT EXISTS telemetry_events (id BIGSERIAL PRIMARY KEY, installation_id TEXT NOT NULL, event_name TEXT NOT NULL, app_version TEXT, os_name TEXT, occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+    c.commit(); c.close()
+
+@app.on_event("startup")
+def startup(): init_db()
 
 def make_token(username):
-    if not TOKEN_SECRET: raise HTTPException(503,"Owner token secret is not configured.")
-    ts=str(int(datetime.now(timezone.utc).timestamp())); payload=f"{username}|{ts}"; sig=hashlib.sha256((payload+TOKEN_SECRET).encode()).hexdigest(); return f"{payload}|{sig}"
+    if not OWNER_TOKEN_SECRET: return None
+    payload=f"{username}|{int(time.time())+86400}"
+    sig=hmac.new(OWNER_TOKEN_SECRET.encode(),payload.encode(),hashlib.sha256).hexdigest()
+    return payload+"."+sig
 
-def require_owner(authorization:Optional[str]=Header(default=None)):
-    if not TOKEN_SECRET: raise HTTPException(503,"Owner token secret is not configured.")
-    if not authorization or not authorization.startswith("Bearer "): raise HTTPException(401,"Owner login required.")
-    parts=authorization[7:].split('|')
-    if len(parts)!=3: raise HTTPException(401,"Invalid owner session.")
-    username,timestamp,sig=parts
-    try: issued=int(timestamp)
-    except ValueError: raise HTTPException(401,"Invalid owner session.")
-    if datetime.now(timezone.utc).timestamp()-issued>8*3600: raise HTTPException(401,"Owner session expired.")
-    payload=f"{username}|{timestamp}"; expected=hashlib.sha256((payload+TOKEN_SECRET).encode()).hexdigest()
-    if not secrets.compare_digest(sig,expected) or username!=OWNER_USERNAME: raise HTTPException(401,"Invalid owner session.")
+def require_owner(authorization: str|None = Header(default=None)):
+    if not OWNER_TOKEN_SECRET:
+        raise HTTPException(503,"OWNER_TOKEN_SECRET is not configured on the server")
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(401,"Owner authentication required")
+    token=authorization.split(" ",1)[1].strip()
+    try: payload,sig=token.rsplit(".",1); username,expiry=payload.split("|",1)
+    except ValueError: raise HTTPException(401,"Invalid owner token")
+    expected=hmac.new(OWNER_TOKEN_SECRET.encode(),payload.encode(),hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig,expected) or int(expiry)<int(time.time()) or username!=OWNER_USERNAME:
+        raise HTTPException(401,"Invalid or expired owner token")
     return username
 
-@app.get('/health')
-def health(): return {'status':'ok','service':APP_NAME,'publisher':PUBLISHER,'version':APP_VERSION,'time':now_iso()}
+@app.get("/health")
+def health():
+    return {"status":"ok","service":APP_NAME,"version":APP_VERSION,"time":datetime.now(timezone.utc).isoformat()}
 
-@app.post('/api/telemetry')
-def receive_telemetry(event:TelemetryEvent,_=Depends(check_telemetry_key)):
-    occurred=event.occurred_at or now_iso(); c=db(); existing=c.execute('SELECT installation_id FROM installations WHERE installation_id=?',(event.installation_id,)).fetchone()
-    if existing: c.execute('UPDATE installations SET last_seen=?,app_version=?,os_name=?,event_count=event_count+1 WHERE installation_id=?',(occurred,event.app_version,event.os_name,event.installation_id))
-    else: c.execute('INSERT INTO installations (installation_id,first_seen,last_seen,app_version,os_name,event_count) VALUES (?,?,?,?,?,1)',(event.installation_id,occurred,occurred,event.app_version,event.os_name))
-    c.execute('INSERT INTO events (installation_id,event_name,app_version,os_name,occurred_at) VALUES (?,?,?,?,?)',(event.installation_id,event.event_name,event.app_version,event.os_name,occurred)); c.commit(); c.close(); return {'accepted':True}
+@app.post("/api/owner/login")
+def owner_login(body: LoginRequest):
+    if not OWNER_PASSWORD: raise HTTPException(503,"OWNER_PASSWORD is not configured on the server")
+    if not hmac.compare_digest(body.username.strip(),OWNER_USERNAME) or not hmac.compare_digest(body.password,OWNER_PASSWORD):
+        raise HTTPException(401,"Invalid owner credentials")
+    token=make_token(OWNER_USERNAME)
+    if not token: raise HTTPException(503,"OWNER_TOKEN_SECRET is not configured on the server")
+    return {"success":True,"token":token,"username":OWNER_USERNAME,"expires_in":86400}
 
-@app.post('/api/owner/login')
-def owner_login(request:LoginRequest):
-    if not OWNER_PASSWORD: raise HTTPException(503,'Owner password is not configured.')
-    if not secrets.compare_digest(request.username,OWNER_USERNAME) or not secrets.compare_digest(request.password,OWNER_PASSWORD): raise HTTPException(401,'Invalid owner credentials.')
-    return {'token':make_token(OWNER_USERNAME),'expires_in':28800}
+@app.get("/api/owner/summary")
+def owner_summary(_: str=Depends(require_owner)):
+    c=db_conn()
+    if not c:
+        return {"success":True,"database":"not configured","total_installations":0,"active_users":0,"last_seen":None,"events":0}
+    with c.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM installations"); total=cur.fetchone()["n"]
+        cur.execute("SELECT COUNT(*) AS n FROM installations WHERE last_seen >= NOW()-INTERVAL '30 days'"); active=cur.fetchone()["n"]
+        cur.execute("SELECT MAX(last_seen) AS t FROM installations"); last=cur.fetchone()["t"]
+        cur.execute("SELECT COUNT(*) AS n FROM telemetry_events"); events=cur.fetchone()["n"]
+    c.close()
+    return {"success":True,"total_installations":total,"active_users":active,"last_seen":last.isoformat() if last else None,"telemetry_events":events}
 
-@app.get('/api/owner/summary')
-def owner_summary(_=Depends(require_owner)):
-    c=db(); total=c.execute('SELECT COUNT(*) AS n FROM installations').fetchone()['n']; events=c.execute('SELECT COUNT(*) AS n FROM events').fetchone()['n']; cutoff=(datetime.now(timezone.utc)-timedelta(days=1)).isoformat(); active=c.execute('SELECT COUNT(*) AS n FROM installations WHERE last_seen>=?',(cutoff,)).fetchone()['n']; versions=c.execute('SELECT app_version,COUNT(*) AS n FROM installations GROUP BY app_version ORDER BY n DESC').fetchall(); types=c.execute('SELECT event_name,COUNT(*) AS n FROM events GROUP BY event_name ORDER BY n DESC LIMIT 20').fetchall(); recent=c.execute('SELECT installation_id,app_version,os_name,first_seen,last_seen,event_count FROM installations ORDER BY last_seen DESC LIMIT 50').fetchall(); c.close(); return {'total_installations':total,'active_24h':active,'total_events':events,'versions':[dict(x) for x in versions],'event_types':[dict(x) for x in types],'recent_installations':[dict(x) for x in recent]}
+@app.post("/api/telemetry")
+def telemetry(event: TelemetryEvent, x_telemetry_key: str|None=Header(default=None)):
+    if TELEMETRY_KEY and not hmac.compare_digest(x_telemetry_key or "", TELEMETRY_KEY):
+        raise HTTPException(401,"Invalid telemetry key")
+    iid=event.installation_id.strip()
+    if not iid: raise HTTPException(400,"installation_id is required")
+    now=datetime.now(timezone.utc)
+    c=db_conn()
+    if c:
+        with c.cursor() as cur:
+            cur.execute("""INSERT INTO installations(installation_id,first_seen,last_seen,app_version,os_name) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(installation_id) DO UPDATE SET last_seen=EXCLUDED.last_seen, app_version=EXCLUDED.app_version, os_name=EXCLUDED.os_name""",(iid,now,now,event.app_version[:80],event.os_name[:80]))
+            cur.execute("INSERT INTO telemetry_events(installation_id,event_name,app_version,os_name,occurred_at) VALUES(%s,%s,%s,%s,%s)",(iid,event.event_name[:80],event.app_version[:80],event.os_name[:80],now))
+        c.commit(); c.close()
+    return {"success":True}
 
-OWNER_HTML='''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BUSINESS ANALYSIS Owner Control Center</title><style>body{margin:0;background:#0b0f14;color:#f4f7fb;font-family:Arial,sans-serif}.wrap{max-width:1200px;margin:auto;padding:28px}.card{background:#111820;border-radius:16px;padding:20px;margin-bottom:18px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.metric{font-size:30px;font-weight:bold}.muted{color:#9aa7b4}.hidden{display:none}input,button{padding:12px;border-radius:8px;border:1px solid #334155;background:#17212b;color:#fff}input{width:100%;box-sizing:border-box;margin:8px 0}button{cursor:pointer;background:#2563eb;border:0;font-weight:bold}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #263241;text-align:left;font-size:13px}@media(max-width:800px){.grid{grid-template-columns:1fr}}</style></head><body><div class="wrap"><div class="card" id="login"><h1>BUSINESS ANALYSIS</h1><p class="muted">Publisher: KHÙLÈ KHÙLÈ III</p><h2>Owner Login</h2><input id="u" placeholder="Owner username"><input id="p" type="password" placeholder="Owner password"><button onclick="login()">Login</button><p id="err"></p></div><div id="dash" class="hidden"><div class="card"><h1>BUSINESS ANALYSIS — Owner Control Center</h1><p class="muted">Publisher: KHÙLÈ KHÙLÈ III • Product analytics only.</p><button onclick="load()">Refresh</button> <button onclick="logout()">Logout</button></div><div class="grid"><div class="card"><div class="muted">Total installations</div><div class="metric" id="total">—</div></div><div class="card"><div class="muted">Active in last 24h</div><div class="metric" id="active">—</div></div><div class="card"><div class="muted">Telemetry events</div><div class="metric" id="events">—</div></div></div><div class="card"><h2>Versions</h2><div id="versions"></div></div><div class="card"><h2>Event activity</h2><div id="types"></div></div><div class="card"><h2>Recent installations</h2><div style="overflow:auto"><table><thead><tr><th>Installation</th><th>Version</th><th>OS</th><th>First seen</th><th>Last seen</th><th>Events</th></tr></thead><tbody id="rows"></tbody></table></div></div></div></div><script>let token=localStorage.getItem('business_analysis_owner_token');if(token){document.getElementById('login').classList.add('hidden');document.getElementById('dash').classList.remove('hidden');load()}async function login(){let r=await fetch('/api/owner/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u.value,password:p.value})});let d=await r.json();if(!r.ok){err.textContent=d.detail||'Login failed';return}token=d.token;localStorage.setItem('business_analysis_owner_token',token);document.getElementById('login').classList.add('hidden');document.getElementById('dash').classList.remove('hidden');load()}async function load(){let r=await fetch('/api/owner/summary',{headers:{Authorization:'Bearer '+token}});if(r.status===401){logout();return}let d=await r.json();total.textContent=d.total_installations;active.textContent=d.active_24h;events.textContent=d.total_events;versions.innerHTML=d.versions.map(x=>`<p>${x.app_version}: <b>${x.n}</b></p>`).join('')||'<p class="muted">No data yet.</p>';types.innerHTML=d.event_types.map(x=>`<p>${x.event_name}: <b>${x.n}</b></p>`).join('')||'<p class="muted">No events yet.</p>';rows.innerHTML=d.recent_installations.map(x=>`<tr><td>${x.installation_id}</td><td>${x.app_version}</td><td>${x.os_name}</td><td>${x.first_seen}</td><td>${x.last_seen}</td><td>${x.event_count}</td></tr>`).join('')}function logout(){localStorage.removeItem('business_analysis_owner_token');location.reload()}</script></body></html>'''
-@app.get('/',response_class=HTMLResponse)
-def owner_center(): return OWNER_HTML
+def analyze_df(df):
+    original_rows, original_columns=len(df),len(df.columns)
+    df=df.copy(); df.columns=[str(c).strip().lower().replace(" ","_") for c in df.columns]
+    aliases={"date":["date","transaction_date"],"product":["product","item","service","product_name"],"category":["category","type"],"sales":["sales","revenue","amount","price"],"cost":["cost","expense","expenses"],"quantity":["quantity","qty","units"],"customer":["customer","customer_name","client"]}
+    rename={}
+    for target,choices in aliases.items():
+        for choice in choices:
+            if choice in df.columns: rename[choice]=target; break
+    df=df.rename(columns=rename)
+    missing=[c for c in ("date","product","sales") if c not in df.columns]
+    if missing: raise ValueError("Missing required columns: "+", ".join(missing))
+    for col in ("category","customer"):
+        if col not in df: df[col]="General" if col=="category" else "Walk-in"
+    for col in ("cost","quantity"):
+        if col not in df: df[col]=0 if col=="cost" else 1
+    df["date"]=pd.to_datetime(df["date"],errors="coerce"); df["sales"]=pd.to_numeric(df["sales"],errors="coerce").fillna(0); df["cost"]=pd.to_numeric(df["cost"],errors="coerce").fillna(0); df["quantity"]=pd.to_numeric(df["quantity"],errors="coerce").fillna(1)
+    missing_values=int(df.isna().sum().sum()); duplicate_rows=int(df.duplicated().sum()); df=df.dropna(subset=["date"]); df=df.drop_duplicates();
+    for col,default in (("product","Unknown"),("category","General"),("customer","Walk-in")):
+        df[col]=df[col].fillna(default).astype(str).str.strip().replace("",default)
+    df["date"]=df["date"].dt.strftime("%Y-%m-%d")
+    numeric=df.select_dtypes(include="number"); stats={}
+    for c in numeric.columns: stats[c]={"total":float(numeric[c].sum()),"average":float(numeric[c].mean()),"min":float(numeric[c].min()),"max":float(numeric[c].max())}
+    cats={}
+    for c in ("product","category","customer"):
+        if c in df: cats[c]=df[c].value_counts().head(10).to_dict()
+    preview=json.loads(df.head(20).to_json(orient="records"))
+    return {"success":True,"file":{"name":"uploaded"},"dataset":{"original_rows":original_rows,"original_columns":original_columns,"cleaned_rows":len(df),"cleaned_columns":len(df.columns)},"data_quality":{"missing_values":missing_values,"duplicate_rows":duplicate_rows},"numeric_summary":stats,"categorical_summary":cats,"preview":preview}
+
+@app.post("/api/analyze")
+async def analyze(file: UploadFile=File(...)):
+    raw=await file.read(); name=(file.filename or "upload").lower()
+    try:
+        if name.endswith(".csv"): df=pd.read_csv(io.BytesIO(raw))
+        elif name.endswith((".xlsx",".xls")): df=pd.read_excel(io.BytesIO(raw))
+        else: raise ValueError("Only CSV and Excel files are supported")
+        result=analyze_df(df); result["file"]= {"name":file.filename,"size_bytes":len(raw)}; return result
+    except Exception as e: raise HTTPException(400,str(e))
