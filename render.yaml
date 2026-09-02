@@ -2,10 +2,9 @@ services:
   - type: web
     name: business-analysis-api
     runtime: python
-    rootDir: Backend
     region: frankfurt
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r Bankend/requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -18,4 +17,10 @@ services:
       - key: BUSINESS_ANALYSIS_TOKEN_SECRET
         sync: false
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: business-analysis-db
+          property: connectionString
+
+databases:
+  - name: business-analysis-db
+    plan: free
