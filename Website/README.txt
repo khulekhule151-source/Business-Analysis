@@ -1,0 +1,1 @@
+Deploy this folder as a static site (for example on Render Static Site). The API URL is configured in index.html. Set the same owner credentials on the Backend Render service.

@@ -1,0 +1,12 @@
+{
+  "app_name": "BUSINESS ANALYSIS",
+  "version": "2.0.0",
+  "publisher": "Khùlè Khùlè III",
+  "api_base_url": "https://business-analysis-api-I8nm.onrender.com",
+  "analysis_endpoint": "/api/analyze",
+  "health_endpoint": "/health",
+  "owner_login_endpoint": "/api/owner/login",
+  "owner_summary_endpoint": "/api/owner/summary",
+  "telemetry_endpoint": "/api/telemetry",
+  "business_data_stays_local": true
+}
