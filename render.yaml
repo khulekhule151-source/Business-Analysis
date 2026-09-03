@@ -1,5 +1,6 @@
 databases:
   - name: business-analysis-v3-db
+    plan: free
     databaseName: business_analysis_v3
     user: business_analysis_v3
 
@@ -7,10 +8,13 @@ services:
   - type: web
     name: business-analysis-v3-api
     runtime: python
+    plan: free
     rootDir: Backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: python -m pip install --upgrade pip && python -m pip install -r requirements.txt && python -m compileall -q app
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
       - key: DATABASE_URL
         fromDatabase:
           name: business-analysis-v3-db

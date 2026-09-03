@@ -10,7 +10,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Text, ForeignKey, func
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 from jose import jwt, JWTError
-from passlib.context import CryptContext
+import bcrypt
 
 APP_VERSION = "3.0.0-professional"
 SECRET_KEY = os.getenv("JWT_SECRET", "CHANGE-ME-IN-RENDER")
@@ -26,7 +26,6 @@ connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite")
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
-pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer = HTTPBearer(auto_error=False)
 
 class Client(Base):
@@ -75,8 +74,14 @@ def db():
     try: yield s
     finally: s.close()
 
-def hash_password(p): return pwd.hash(p)
-def verify_password(p, h): return pwd.verify(p, h)
+def hash_password(p):
+    return bcrypt.hashpw(p.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def verify_password(p, h):
+    try:
+        return bcrypt.checkpw(p.encode("utf-8"), h.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 def token_for(user):
     exp = datetime.now(timezone.utc) + timedelta(minutes=TOKEN_MINUTES)
     return jwt.encode({"sub": str(user.id), "role": user.role, "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)

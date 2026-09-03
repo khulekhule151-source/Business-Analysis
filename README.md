@@ -1,34 +1,21 @@
 # Business Analysis V3 Professional
 
-Full-stack business intelligence system:
+Full-stack business analytics system:
+- FastAPI backend
+- Render PostgreSQL
+- Role-based OWNER / CLIENT access
+- Professional Windows desktop dashboard
+- Web login/dashboard
+- CSV/Excel analysis
+- KPI cards, charts, filters, automatic insights, data-quality analysis and exports
 
-- **Backend:** FastAPI + PostgreSQL + JWT/RBAC
-- **Desktop:** CustomTkinter professional BI dashboard
-- **Website:** secure login + owner/client workspace
-- **Deployment:** Render via `render.yaml`
+## Render
+The included `render.yaml` pins the API to Python 3.13.5 and uses a deterministic pip build command. The API service lives in `Backend/`; the static website lives in `Website/`.
 
-## Professional dashboard features
+Render's current default Python for new native services is 3.14.3, so the explicit Python pin prevents dependency resolution from falling back to source builds for packages that do not have matching wheels.
 
-- KPI cards: revenue, cost, profit, margin, rows/orders, average order, datasets
-- Advanced text/category filtering
-- Financial performance chart
-- Category revenue chart
-- Automatic business insights
-- Data-quality score, completeness, missing cells and duplicates
-- CSV, Excel and PDF exports
-- Polished Owner Control Center
-- Client management and client status controls
-- Backend-enforced client data isolation
+Set these Blueprint values when prompted:
+- `OWNER_EMAIL` — initial owner email
+- `OWNER_PASSWORD` — strong initial owner password
 
-## First run
-
-1. Deploy the repository to Render using `render.yaml`.
-2. Set `OWNER_EMAIL` and `OWNER_PASSWORD` in Render.
-3. Verify `https://YOUR-API/health`.
-4. On Windows install Desktop_App requirements:
-   `pip install -r requirements.txt`
-5. Start:
-   `python business_analysis_v3.py`
-6. Sign in with the owner account, create a client, then use the client login for dataset analysis.
-
-The desktop app connects to Render; it does not run on Render.
+Never commit secrets.

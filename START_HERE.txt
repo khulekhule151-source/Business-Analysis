@@ -1,14 +1,15 @@
-BUSINESS ANALYSIS V3 — PROFESSIONAL EDITION
+BUSINESS ANALYSIS V3 PROFESSIONAL — RENDER DEPLOYMENT
 
-1) Deploy this project to Render using render.yaml.
-2) Set OWNER_EMAIL and OWNER_PASSWORD on Render.
-3) Open YOUR_API_URL/health and confirm status=ok.
-4) Windows: open Desktop_App in Command Prompt.
-5) Run: pip install -r requirements.txt
-6) Run: python business_analysis_v3.py
-7) Login as OWNER.
-8) Create a CLIENT in Owner Control Center.
-9) Login as the CLIENT and upload CSV/Excel.
-10) Use Dashboard, Data Analysis and Reports & Exports.
+1. Upload the CONTENTS of this folder to a GitHub repository. Keep render.yaml at repository root.
+2. In Render choose New -> Blueprint and connect the repository.
+3. The Blueprint creates: API, PostgreSQL, and Website.
+4. When prompted, set OWNER_EMAIL and OWNER_PASSWORD for the initial owner account. Use a strong password.
+5. Wait for the API to become Live. Test: https://YOUR-API-URL/health
+6. Open the Website URL.
+7. On Windows install Desktop_App requirements: pip install -r requirements.txt
+8. Run Desktop_Appusiness_analysis_v3.py. Set the API URL to your Render API URL.
 
-The backend enforces OWNER/CLIENT roles and client data isolation.
+IMPORTANT
+- This version pins Render Python to 3.13.5 to avoid Python 3.14 dependency builds.
+- Do not put OWNER_PASSWORD or JWT_SECRET in GitHub. Render supplies secrets through environment variables.
+- Free Render Postgres is for testing/preview and currently expires after 30 days; upgrade for long-term production storage.
